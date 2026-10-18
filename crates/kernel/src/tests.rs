@@ -349,6 +349,26 @@ fn fillet_consuming_a_side_face_makes_a_full_round() {
     assert_eq!(measure(&b).unwrap().volume, 840.0);
 }
 
+/// A chamfer too tall for the wall it runs along (the loop blend's "taller than the walls") is
+/// clamped to the largest that fits, rather than refused: a 2 mm disc's top edge takes at most 2,
+/// where the wall is used up.
+#[test]
+fn chamfer_max_finds_the_largest_distance_that_works() {
+    let disc = cylinder(Vec3::ZERO, Vec3::Z, 13.0, 2.0).unwrap();
+    let top = [Vec3::new(0.0, 13.0, 2.0), Vec3::new(0.0, -13.0, 2.0)];
+    assert!(matches!(chamfer(&disc, &top, 2.5), Err(KernelError::TooLarge(_))), "taller than the walls");
+    let (d, body) = chamfer_max(&disc, &top, 2.5).unwrap();
+    assert_eq!(d, 2.0);
+    // The wall is gone: the chamfer runs from the top face (radius 11) to the bottom rim
+    // (radius 13), removing a wedge of π·148/3 mm³; a disc's solid is π·866/3.
+    assert!(rel(measure(&body).unwrap().volume, PI * 866.0 / 3.0) < 2e-4, "{}", measure(&body).unwrap().volume);
+    assert!(body.validity().is_empty(), "{:?}", body.validity());
+    // A size that fits is asked for as it is; no edge, no size.
+    assert!(chamfer(&disc, &top, 1.0).is_ok());
+    assert!(chamfer_max(&disc, &top, 0.0).is_none());
+    assert!(chamfer_max(&disc, &[Vec3::new(500.0, 0.0, 2.0)], 1.0).is_none());
+}
+
 #[test]
 fn fillet_max_finds_the_largest_radius_that_works() {
     let too_large = |b: &Body, edges: &[Vec3], r: f64| matches!(fillet(b, edges, r), Err(KernelError::TooLarge(_)));

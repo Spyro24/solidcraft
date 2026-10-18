@@ -33,6 +33,21 @@ fn round_as_tall_as_a_disc_uses_up_its_wall() {
     assert!(rel(volume(&mut s), expect) < 2e-4, "{} vs {expect}", volume(&mut s));
 }
 
+/// The same disc chamfered 2.5 mm, taller than its 2 mm wall: instead of "not supported yet: the
+/// blend is taller than the walls" the size is clamped to 2 mm, where the wall is used up.
+#[test]
+fn chamfer_taller_than_a_discs_wall_is_clamped_to_it() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 13, "height": 2}));
+    let out = run(&mut s, "solid.chamfer", json!({"edges": [[0, 13, 2], [0, -13, 2]], "distance": 2.5}));
+    assert_eq!(out["distance_applied"].as_f64(), Some(2.0), "{out}");
+    let warning = out["feature"].as_u64().and_then(|id| s.model.result(id)).and_then(|r| r.warning.clone()).unwrap_or_default();
+    assert!(warning.contains("reduced to 2 mm"), "{warning}");
+    // The wall is gone: the chamfer runs from the top face (radius 11) to the bottom rim
+    // (radius 13), so a disc of π·866/3 mm³ is left.
+    assert!(rel(volume(&mut s), PI * 866.0 / 3.0) < 2e-4, "{} vs {}", volume(&mut s), PI * 866.0 / 3.0);
+}
+
 /// #783: an edge pick far from every edge (beside the body, above it, inside it, or on another
 /// body than the one named) is refused and adds nothing, instead of rounding the nearest edge;
 /// a pick on an edge, or a little off it as a click lands, still works.

@@ -1917,22 +1917,22 @@ pub fn fillet_g2_corners(body: &Body, edges: &[Vec3], radius: f64) -> Result<Bod
     corners(body, edges, radius, Shape::Round, "fillet", true).and_then(|b| closed(body, b))
 }
 
-/// The step of the radius search: three significant digits of the requested radius.
-fn radius_step(radius: f64) -> f64 {
-    10f64.powf(radius.log10().floor() - 3.0)
+/// The step of the size search: three significant digits of the requested size.
+fn size_step(size: f64) -> f64 {
+    10f64.powf(size.log10().floor() - 3.0)
 }
 
-/// The largest radius below `radius` (to three significant digits) at which the fillet of
-/// these edges works, with its result; `None` when none does. Each candidate is a real fillet
-/// of the edges, so the radius returned is one that was built; the search runs up to 16 of
-/// them, so it is for an explicit request, not every refusal.
-pub fn fillet_max(body: &Body, edges: &[Vec3], radius: f64) -> Option<(f64, Body)> {
-    if !(radius.is_finite() && radius > 1e-6) {
+/// The largest size at or below `size` (to three significant digits) at which `build` succeeds,
+/// with its result; `None` when none does. Each candidate is a real build, so the size returned
+/// is one that was built; the search runs up to 16 of them, so it is for an explicit request,
+/// not every refusal.
+fn size_max(size: f64, build: impl Fn(f64) -> Result<Body>) -> Option<(f64, Body)> {
+    if !(size.is_finite() && size > 1e-6) {
         return None;
     }
-    let q = radius_step(radius);
-    // Radii n·q for n in [0, hi): hi fails (it is the request, or above it), lo works.
-    let mut hi = (radius / q).ceil() as u64;
+    let q = size_step(size);
+    // Sizes n·q for n in [0, hi): hi fails (it is the request, or above it), lo works.
+    let mut hi = (size / q).ceil() as u64;
     let mut lo = 0u64;
     let mut best: Option<Body> = None;
     // log2(10⁴) steps reach the step size; the cap keeps a slow body from stalling.
@@ -1941,7 +1941,7 @@ pub fn fillet_max(body: &Body, edges: &[Vec3], radius: f64) -> Option<(f64, Body
             break;
         }
         let mid = lo + (hi - lo) / 2;
-        match fillet(body, edges, mid as f64 * q) {
+        match build(mid as f64 * q) {
             Ok(b) => {
                 lo = mid;
                 best = Some(b);
@@ -1950,6 +1950,34 @@ pub fn fillet_max(body: &Body, edges: &[Vec3], radius: f64) -> Option<(f64, Body
         }
     }
     best.map(|b| (lo as f64 * q, b))
+}
+
+/// The largest radius below `radius` (to three significant digits) at which the fillet of
+/// these edges works, with its result; `None` when none does.
+pub fn fillet_max(body: &Body, edges: &[Vec3], radius: f64) -> Option<(f64, Body)> {
+    size_max(radius, |r| fillet(body, edges, r))
+}
+
+/// The largest distance below `distance` (to three significant digits) at which the chamfer of
+/// these edges works, with its result; `None` when none does.
+pub fn chamfer_max(body: &Body, edges: &[Vec3], distance: f64) -> Option<(f64, Body)> {
+    size_max(distance, |d| chamfer(body, edges, d))
+}
+
+/// [`chamfer_max`] for a chamfer whose second side is a distance or an angle: the second side
+/// scales with the first (an angle is unchanged), so the result is the same shape, smaller.
+pub fn chamfer_sides_max(body: &Body, edges: &[Vec3], d1: f64, side: ChamferSide, flip: bool) -> Option<(f64, Body)> {
+    if !(d1.is_finite() && d1 > 1e-6) {
+        return None;
+    }
+    size_max(d1, |d| {
+        let k = d / d1;
+        let side = match side {
+            ChamferSide::Distance(d2) => ChamferSide::Distance(d2 * k),
+            ChamferSide::Angle(a) => ChamferSide::Angle(a),
+        };
+        chamfer_sides(body, edges, d, side, flip)
+    })
 }
 
 /// [`fillet_max`] for each group of the edges that may limit each other's radius (sharing a

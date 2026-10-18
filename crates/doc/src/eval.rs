@@ -392,6 +392,49 @@ fn fillet_fitted(
     }
 }
 
+/// A chamfer of `edges`; a distance too large for the geometry around them is reduced to the
+/// largest that fits, and the used distance is returned. A chamfer has no `exact` mode: a size
+/// the geometry cannot take (a blend taller than the walls beside it, or one running past the
+/// faces at the edge) is clamped rather than refused.
+fn chamfer_fitted(
+    vals: &BTreeMap<String, Value>,
+    body: &kernel::Body,
+    edges: &[Vec3],
+    d: f64,
+    distance2: &Option<crate::Expr>,
+    angle: &Option<crate::Expr>,
+    flip: bool,
+) -> Result<(kernel::Body, Option<f64>)> {
+    let side = match (distance2, angle) {
+        (Some(e), _) => Some(kernel::ChamferSide::Distance(val(vals, e, Kind::Length)?)),
+        (None, Some(e)) => Some(kernel::ChamferSide::Angle(val(vals, e, Kind::Angle)?)),
+        (None, None) => None,
+    };
+    let build = |d: f64| match side {
+        Some(s) => kernel::chamfer_sides(body, edges, d, s, flip),
+        None => kernel::chamfer(body, edges, d),
+    };
+    match build(d) {
+        Ok(b) => Ok((b, None)),
+        Err(kernel::KernelError::TooLarge(why)) => {
+            let found = match side {
+                Some(s) => kernel::chamfer_sides_max(body, edges, d, s, flip),
+                None => kernel::chamfer_max(body, edges, d),
+            };
+            match found {
+                Some((used, b)) if used < d => Ok((b, Some(used))),
+                _ => Err(kernel::KernelError::TooLarge(why).into()),
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The warning of a chamfer whose distance was reduced to `used`.
+fn reduced_chamfer_note(used: f64) -> String {
+    format!("the distance is reduced to {} mm, the largest that fits these edges", show_mm(used))
+}
+
 /// The warning of a fillet whose radius `asked` was reduced to `used` (per edge).
 fn reduced_note(used: &[f64], asked: f64) -> String {
     let mut values: Vec<f64> = used.iter().copied().filter(|r| *r < asked).collect();
@@ -4337,7 +4380,7 @@ fn replay(
                 let ti = blend_target(st, &None, &moved)?;
                 let Some(mb) = st.bodies.get(ti).cloned() else { continue };
                 let nb = match &src.kind {
-                    FeatureKind::Chamfer { distance2, angle, flip, .. } => chamfer_with(vals, &mb.body, &moved, r, distance2, angle, *flip)?,
+                    FeatureKind::Chamfer { distance2, angle, flip, .. } => chamfer_fitted(vals, &mb.body, &moved, r, distance2, angle, *flip)?.0,
                     // A copy is congruent to the original: the radius it was reduced to first.
                     FeatureKind::Fillet { fit, .. } => match st.fitted.get(&src.id) {
                         Some(used) => {
@@ -4689,27 +4732,6 @@ fn face_plane(st: &ModelState, picked: &Plane, at: Vec3, name: Option<&str>) -> 
         }
         None => (*picked, Some("the face the sketch was on is gone; the sketch stays where it was".into())),
     }
-}
-
-/// A chamfer, equal or by its second distance or angle.
-fn chamfer_with(
-    vals: &BTreeMap<String, Value>,
-    b: &kernel::Body,
-    edges: &[Vec3],
-    d: f64,
-    distance2: &Option<crate::Expr>,
-    angle: &Option<crate::Expr>,
-    flip: bool,
-) -> Result<kernel::Body> {
-    let side = match (distance2, angle) {
-        (Some(e), _) => Some(kernel::ChamferSide::Distance(val(vals, e, Kind::Length)?)),
-        (None, Some(e)) => Some(kernel::ChamferSide::Angle(val(vals, e, Kind::Angle)?)),
-        (None, None) => None,
-    };
-    Ok(match side {
-        Some(s) => kernel::chamfer_sides(b, edges, d, s, flip)?,
-        None => kernel::chamfer(b, edges, d)?,
-    })
 }
 
 fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState, warning: &mut Option<String>) -> Result<()> {
@@ -5227,7 +5249,14 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                     }
                     (b, input)
                 }
-                FeatureKind::Chamfer { distance2, angle, flip, .. } => (chamfer_with(vals, &mb.body, &edges, r, distance2, angle, *flip)?, input),
+                FeatureKind::Chamfer { distance2, angle, flip, .. } => {
+                    let (b, used) = chamfer_fitted(vals, &mb.body, &edges, r, distance2, angle, *flip)?;
+                    if let Some(used) = used {
+                        append_warning(warning, reduced_chamfer_note(used));
+                        st.fitted.insert(f.id, vec![used; edges.len()]);
+                    }
+                    (b, input)
+                }
                 _ => return Err(DocError::Invalid("blend".into())),
             };
             // Keeping the input's planar certificates may join faces; their history stays over

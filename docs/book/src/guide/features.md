@@ -93,7 +93,10 @@ holes follow later edits of the sketch, place them with **Multiple**.
 
 Fillets and chamfers handle straight edges between planar faces, whole smooth loops, runs of
 neighbouring edges with mitred or spherical corners, and closed chains of curved edges (a rolling
-ball). See the roadmap's known limitations for the rest.
+ball). A chamfer too large for the geometry around its edges — one taller than the walls it runs
+along, or running past the faces beside the edge — is reduced to the largest that fits, and the
+feature says so; a fillet the same size is refused unless its **Reduce to Fit** is chosen. See the
+roadmap's known limitations for the rest.
 
 **Curvature (G2)** in the Fillet dialog's **Radius Type** blends straight edges between two
 planar faces with an exact quintic section. The tangent plane and curvature match each side

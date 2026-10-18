@@ -1,5 +1,6 @@
-//! #1080: a fillet or chamfer too large for the geometry beside its edge is refused, naming the
-//! largest size that fits, and one that fits still builds.
+//! #1080 and the loop blend: a fillet too large for the geometry beside its edge is refused,
+//! naming the largest size that fits; a chamfer of the same size is clamped to the largest that
+//! fits instead, and one that fits still builds.
 
 use std::path::Path;
 
@@ -19,21 +20,25 @@ fn chamfer_error(s: &Session) -> Option<String> {
     s.model.results.iter().find(|r| r.name == "Chamfer1").and_then(|r| r.error.clone())
 }
 
-/// The report's design: a 20 mm cube with a 10 mm square opening into each of three faces,
-/// then a 9 mm chamfer on the top edge over one side opening. The openings are 5 mm from the
-/// edge, so the chamfer would cut through their rims. It is refused, naming 5 mm, and the part
-/// is left as it was.
-#[test]
-fn chamfer_through_the_openings_is_refused() {
-    let mut s = open_fixture();
-    let err = chamfer_error(&s).expect("the 9 mm chamfer cuts through two openings: it must be refused");
-    assert!(err.contains("runs past the faces beside the edge"), "{err}");
-    assert!(err.contains("the largest size that fits is 5 mm"), "{err}");
-    assert!((volume(&mut s) - 4000.0).abs() < 1e-6, "the part stays as it was without the chamfer");
+fn chamfer_warning(s: &Session) -> String {
+    s.model.results.iter().find(|r| r.name == "Chamfer1").and_then(|r| r.warning.clone()).unwrap_or_default()
 }
 
-/// Sizes that stop short of the openings build, and take away exactly the chamfer's triangle
-/// along the 20 mm edge.
+/// The report's design: a 20 mm cube with a 10 mm square opening into each of three faces,
+/// then a 9 mm chamfer on the top edge over one side opening. The openings are 5 mm from the
+/// edge, so the requested chamfer would cut through their rims. It is clamped to 5 mm, the
+/// largest that fits, and the feature says so.
+#[test]
+fn chamfer_through_the_openings_is_reduced_to_the_largest_that_fits() {
+    let mut s = open_fixture();
+    assert_eq!(chamfer_error(&s), None, "the 9 mm chamfer is clamped, not refused");
+    assert!(chamfer_warning(&s).contains("reduced to 5 mm"), "{}", chamfer_warning(&s));
+    let want = 4000.0 - 0.5 * 5.0 * 5.0 * 20.0;
+    assert!((volume(&mut s) - want).abs() < 1e-6, "the chamfer is cut at 5 mm: {}", volume(&mut s));
+}
+
+/// Sizes that stop short of the openings build as asked, and take away exactly the chamfer's
+/// triangle along the 20 mm edge.
 #[test]
 fn chamfer_that_fits_still_builds() {
     let mut s = open_fixture();
